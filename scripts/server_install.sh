@@ -26,10 +26,16 @@ bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release
 # Генерируем ключи ТОЛЬКО если конфигурации ещё не было
 if [ ! -f "$CONFIG_FILE" ] || ! grep -q "Xray UUID" "$CONFIG_FILE"; then
     echo "Generating XTLS-Reality keys (first run)..."
-    # Используем sed для надёжного парсинга ключей
-    PRIVATE_KEY=$(xray x25519 | grep "Private key" | sed 's/Private key: //')
-    PUBLIC_KEY=$(xray x25519 | grep "Public key" | sed 's/Public key: //')
+    
+    # ВАЖНО: вызываем xray x25519 ОДИН раз и парсим ОБА ключа из одного вывода!
+    KEY_OUTPUT=$(xray x25519)
+    PRIVATE_KEY=$(echo "$KEY_OUTPUT" | grep "Private key:" | awk '{print $NF}')
+    PUBLIC_KEY=$(echo "$KEY_OUTPUT" | grep "Public key:" | awk '{print $NF}')
     UUID=$(xray uuid)
+    
+    echo "  Private Key: ${PRIVATE_KEY:0:10}..."
+    echo "  Public Key:  ${PUBLIC_KEY:0:10}..."
+    echo "  UUID:        $UUID"
 
     echo "Configuring Xray-core..."
     cat > "$XRAY_CONFIG" <<EOF
@@ -70,6 +76,9 @@ fi
 
 systemctl restart xray
 systemctl enable xray
+
+# Открываем порт 443 в файрволе
+ufw allow 443/tcp 2>/dev/null || iptables -I INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || true
 
 # 3. Install Go and compile MyVPN
 echo "[3/5] Installing Go and compiling MyVPN..."
