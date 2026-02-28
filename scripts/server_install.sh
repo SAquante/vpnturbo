@@ -29,8 +29,8 @@ if [ ! -f "$CONFIG_FILE" ] || ! grep -q "Xray UUID" "$CONFIG_FILE"; then
     
     # ВАЖНО: вызываем xray x25519 ОДИН раз и парсим ОБА ключа из одного вывода!
     KEY_OUTPUT=$(xray x25519)
-    PRIVATE_KEY=$(echo "$KEY_OUTPUT" | grep "Private key:" | awk '{print $NF}')
-    PUBLIC_KEY=$(echo "$KEY_OUTPUT" | grep "Public key:" | awk '{print $NF}')
+    PRIVATE_KEY=$(echo "$KEY_OUTPUT" | grep "PrivateKey:" | awk '{print $NF}')
+    PUBLIC_KEY=$(echo "$KEY_OUTPUT" | grep "Password:" | awk '{print $NF}')
     UUID=$(xray uuid)
     
     echo "  Private Key: ${PRIVATE_KEY:0:10}..."
@@ -41,24 +41,32 @@ if [ ! -f "$CONFIG_FILE" ] || ! grep -q "Xray UUID" "$CONFIG_FILE"; then
     cat > "$XRAY_CONFIG" <<EOF
 {
     "log": { "loglevel": "warning" },
+    "policy": {
+        "levels": {
+            "0": { "handshake": 10, "connIdle": 300 }
+        }
+    },
     "inbounds": [
         {
-            "port": 443,
+            "port": 8443,
             "protocol": "vless",
             "settings": {
-                "clients": [ { "id": "$UUID", "flow": "xtls-rprx-vision" } ],
+                "clients": [ { "id": "$UUID", "flow": "" } ],
                 "decryption": "none"
             },
             "streamSettings": {
-                "network": "tcp",
+                "network": "xhttp",
                 "security": "reality",
                 "realitySettings": {
                     "show": false,
-                    "dest": "www.microsoft.com:443",
+                    "dest": "gateway.icloud.com:443",
                     "xver": 0,
-                    "serverNames": ["www.microsoft.com", "microsoft.com"],
+                    "serverNames": ["gateway.icloud.com"],
                     "privateKey": "$PRIVATE_KEY",
                     "shortIds": ["12345678"]
+                },
+                "xhttpSettings": {
+                    "path": "/$(head -c 4 /dev/urandom | xxd -p)"
                 }
             }
         }
@@ -77,11 +85,15 @@ fi
 systemctl restart xray
 systemctl enable xray
 
-# Открываем порт 443 в файрволе
-ufw allow 443/tcp 2>/dev/null || iptables -I INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || true
+# Открываем порт 8443 в файрволе
+ufw allow 8443/tcp 2>/dev/null || iptables -I INPUT -p tcp --dport 8443 -j ACCEPT 2>/dev/null || true
 
-# 3. Install Go and compile MyVPN
-echo "[3/5] Installing Go and compiling MyVPN..."
+# 3. Install Hysteria 2
+echo "[3/5] Installing Hysteria 2..."
+bash "$SCRIPT_DIR/install_hysteria.sh"
+
+# 4. Install Go and compile MyVPN
+echo "[4/5] Installing Go and compiling MyVPN..."
 
 if ! /usr/local/go/bin/go version &>/dev/null; then
     echo "Downloading Go 1.22.1..."
@@ -90,14 +102,14 @@ if ! /usr/local/go/bin/go version &>/dev/null; then
     rm go1.22.1.linux-amd64.tar.gz
 fi
 
-echo "Compiling MyVPN server from $REPO_DIR..."
+echo "Compiling MyVPN server..."
 mkdir -p "$OPT_DIR"
 cd "$REPO_DIR"
 /usr/local/go/bin/go build -o "$OPT_DIR/myvpn-server" ./cmd/server
 /usr/local/go/bin/go build -o "$OPT_DIR/myvpn-client" ./cmd/client
 
-# 4. Configure MyVPN service
-echo "[4/5] Configuring MyVPN Service..."
+# 5. Configure MyVPN service
+echo "[5/5] Configuring MyVPN Service..."
 
 # Генерируем VPN ключ только при первой установке
 if [ ! -f "$OPT_DIR/vpn.key" ]; then
@@ -125,55 +137,13 @@ systemctl enable myvpn
 systemctl restart myvpn
 
 # 5. Output
-SERVER_IP=$(curl -s https://ifconfig.me)
-VLESS_LINK="vless://${UUID}@${SERVER_IP}:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.microsoft.com&fp=chrome&pbk=${PUBLIC_KEY}&sid=12345678&type=tcp#VPNTurbo"
-
-cat > "$CONFIG_FILE" <<EOF
-=============== VPNTurbo Client Configuration ===============
-Server IP:        $SERVER_IP
-Xray UUID:        $UUID
-Xray Public Key:  $PUBLIC_KEY
-VPN Master Key:   $VPN_KEY
-VLESS Link:       $VLESS_LINK
-=============================================================
-EOF
+# 6. Final Setup & Output
+echo "[6/6] Finalizing setup and generating keys..."
+bash "$SCRIPT_DIR/newkey.sh" "gateway.icloud.com" "VPNTurbo"
 
 echo ""
-echo "[5/5] Setup Finished Successfully!"
 echo "=================================================================="
-echo "    🎉 SERVER IS RUNNING AND READY TO ACCEPT CONNECTIONS 🎉     "
-echo "=================================================================="
-echo ""
-echo "📋 Данные для подключения:"
-echo "  IP сервера:      $SERVER_IP"
-echo "  Xray UUID:       $UUID"
-echo "  Xray Public Key: $PUBLIC_KEY"
-echo "  VPN Master Key:  $VPN_KEY"
-echo ""
-echo "=================================================================="
-echo "📱 VLESS ССЫЛКА ДЛЯ v2rayNG / v2rayN:"
-echo "=================================================================="
-echo ""
-echo "$VLESS_LINK"
-echo ""
-echo "=================================================================="
-echo ""
-
-# QR код
-echo "📲 QR-код для v2rayNG:"
-qrencode -t ANSIUTF8 "$VLESS_LINK"
-echo ""
-
-echo "=================================================================="
-echo "📖 КАК ПОДКЛЮЧИТЬСЯ:"
-echo "  Android: Откройте v2rayNG → + → Вставить из буфера обмена"
-echo "  Windows: Откройте v2rayN  → + → Вставить из буфера обмена"
-echo ""
-echo "  Затем запустите myvpn-client (нужен root/TUN доступ):"
-echo "  ./myvpn-client -server $SERVER_IP:8080 -key $VPN_KEY -socks5 127.0.0.1:10808"
-echo "=================================================================="
-echo ""
-echo "⚙️  Конфигурация сохранена в: $CONFIG_FILE"
-echo "    systemctl status xray   — статус Xray"
-echo "    systemctl status myvpn  — статус MyVPN"
+echo "✅ УСТАНОВКА ЗАВЕРШЕНА!"
+echo "Используйте QR-коды выше для быстрого подключения в v2rayNG."
+echo "Hysteria 2 (вариант 1) — самый надежный способ обхода блокировок."
 echo "=================================================================="

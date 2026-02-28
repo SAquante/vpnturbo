@@ -1,38 +1,36 @@
 #!/bin/bash
-# Генерация нового ключа VPNTurbo + VLESS ссылка + QR
-# Использование: bash /opt/myvpn/newkey.sh [sni] [name]
-# Пример:       bash /opt/myvpn/newkey.sh max.ru MyVPN
+# Генерация новых ключей VPNTurbo (VLESS + Hysteria 2)
+# Использование: bash /root/vpnturbo/scripts/newkey.sh [sni] [name]
 
 set -e
 
-SNI="${1:-max.ru}"
+SNI="${1:-gateway.icloud.com}"
 NAME="${2:-VPNTurbo}"
 SHORT_ID=$(openssl rand -hex 3)
 SERVER_IP=$(curl -s ifconfig.me)
 XHTTP_PATH="/$(openssl rand -hex 4)"
 
-# Генерируем ключи
+echo "================================================================"
+echo "    🔑 Generating New Keys for VPNTurbo Dual-Protocol           "
+echo "================================================================"
+
+# 1. Xray Keys & Config
 KEY_OUTPUT=$(xray x25519)
-PRIVATE_KEY=$(echo "$KEY_OUTPUT" | awk '/PrivateKey/ {print $2}')
-PUBLIC_KEY=$(echo "$KEY_OUTPUT" | awk '/Password/ {print $2}')
+PRIVATE_KEY=$(echo "$KEY_OUTPUT" | grep "PrivateKey:" | awk '{print $NF}')
+PUBLIC_KEY=$(echo "$KEY_OUTPUT" | grep "Password:" | awk '{print $NF}')
 UUID=$(xray uuid)
 
-echo "🔑 Generating new keys..."
-echo "  UUID:        $UUID"
-echo "  Private Key: ${PRIVATE_KEY:0:12}..."
-echo "  Public Key:  $PUBLIC_KEY"
-echo "  Short ID:    $SHORT_ID"
-echo "  SNI:         $SNI"
-echo "  XHTTP Path:  $XHTTP_PATH"
-echo ""
-
-# Обновляем конфиг Xray с XHTTP транспортом
 cat > /usr/local/etc/xray/config.json <<EOF
 {
     "log": { "loglevel": "warning" },
+    "policy": {
+        "levels": {
+            "0": { "handshake": 10, "connIdle": 300 }
+        }
+    },
     "inbounds": [
         {
-            "port": 443,
+            "port": 8443,
             "protocol": "vless",
             "settings": {
                 "clients": [ { "id": "$UUID", "flow": "" } ],
@@ -43,9 +41,9 @@ cat > /usr/local/etc/xray/config.json <<EOF
                 "security": "reality",
                 "realitySettings": {
                     "show": false,
-                    "dest": "${SNI}:443",
+                    "dest": "$SNI:443",
                     "xver": 0,
-                    "serverNames": ["${SNI}"],
+                    "serverNames": ["$SNI"],
                     "privateKey": "$PRIVATE_KEY",
                     "shortIds": ["$SHORT_ID"]
                 },
@@ -59,46 +57,69 @@ cat > /usr/local/etc/xray/config.json <<EOF
 }
 EOF
 
-# Перезапускаем Xray
+# 2. Hysteria 2 Keys & Config
+VPN_KEY=$(cat /opt/myvpn/vpn.key)
+
+cat > /etc/hysteria/config.yaml <<EOF
+listen: :443
+
+tls:
+  cert: /etc/hysteria/server.crt
+  key: /etc/hysteria/server.key
+
+auth:
+  type: password
+  password: "$VPN_KEY"
+
+masquerade:
+  type: proxy
+  proxy:
+    url: https://$SNI
+    rewriteHost: true
+
+ignoreClientBandwidth: true
+EOF
+
+# Restart Services
 systemctl restart xray
-sleep 1
+systemctl restart hysteria-server
 
-# Формируем VLESS ссылку (type=xhttp, без flow для xhttp)
-VLESS_LINK="vless://${UUID}@${SERVER_IP}:443?type=xhttp&security=reality&pbk=${PUBLIC_KEY}&fp=chrome&sni=${SNI}&sid=${SHORT_ID}&spx=%2F&path=$(echo $XHTTP_PATH | sed 's|/|%2F|g')#${NAME}"
+# Generate Links
+VLESS_LINK="vless://${UUID}@${SERVER_IP}:8443?type=xhttp&security=reality&pbk=${PUBLIC_KEY}&fp=chrome&sni=${SNI}&sid=${SHORT_ID}&spx=%2F&path=$(echo $XHTTP_PATH | sed 's|/|%2F|g')#${NAME}_VLESS"
+HYSTERIA_LINK="hysteria2://${VPN_KEY}@${SERVER_IP}:443?sni=${SNI}&insecure=1&obfs=none#${NAME}_Hysteria"
 
-# Сохраняем
-VPN_KEY=$(cat /opt/myvpn/vpn.key 2>/dev/null || echo "not_set")
+# Save Output
 cat > /opt/myvpn/client_info.txt <<EOF
+=============== VPNTurbo Configuration ===============
 Server IP:        $SERVER_IP
 Xray UUID:        $UUID
 Xray Public Key:  $PUBLIC_KEY
-Short ID:         $SHORT_ID
-SNI:              $SNI
-Transport:        XHTTP (SplitHTTP)
-XHTTP Path:       $XHTTP_PATH
 VPN Master Key:   $VPN_KEY
+SNI:              $SNI
+XHTTP Path:       $XHTTP_PATH
+
 VLESS Link:       $VLESS_LINK
+Hysteria 2 Link:  $HYSTERIA_LINK
+======================================================
 EOF
 
-STATUS=$(systemctl is-active xray)
-echo "✅ Xray status: $STATUS"
-
-if [ "$STATUS" != "active" ]; then
-    echo "❌ Xray failed to start! Checking logs..."
-    journalctl -u xray --no-pager -n 5
-    exit 1
-fi
-
+echo "✅ Services restarted."
 echo ""
-echo "══════════════════════════════════════════"
-echo "📱 VLESS ССЫЛКА (скопируйте в v2rayNG):"
-echo "══════════════════════════════════════════"
+echo "════════════════════════════════════════════════════════"
+echo "🚀 ВАРИАНТ 1: HYSTERIA 2 (Самый быстрый и пробивной)"
+echo "════════════════════════════════════════════════════════"
+echo "$HYSTERIA_LINK"
 echo ""
+qrencode -t ANSIUTF8 "$HYSTERIA_LINK"
+echo ""
+echo "════════════════════════════════════════════════════════"
+echo "🥷 ВАРИАНТ 2: VLESS REALITY (Максимальная скрытность)"
+echo "════════════════════════════════════════════════════════"
 echo "$VLESS_LINK"
 echo ""
-echo "══════════════════════════════════════════"
-echo "📲 QR-код:"
-echo "══════════════════════════════════════════"
-qrencode -t ANSIUTF8 "$VLESS_LINK" 2>/dev/null || echo "(установите qrencode: apt install qrencode)"
+qrencode -t ANSIUTF8 "$VLESS_LINK"
 echo ""
-echo "Данные сохранены: /opt/myvpn/client_info.txt"
+echo "════════════════════════════════════════════════════════"
+echo "Инструкция: Скопируйте одну из ссылок и вставьте в v2rayNG (+ -> Import from clipboard)"
+echo "Hysteria 2 обычно работает лучше при сильных блокировках."
+echo "════════════════════════════════════════════════════════"
