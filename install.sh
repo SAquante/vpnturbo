@@ -97,12 +97,12 @@ fi
 
 # Clone repo 
 cd /root
-if [ -d "myvpn" ]; then
-    cd myvpn
+if [ -d "vpnturbo" ]; then
+    cd vpnturbo
     git pull
 else
-    git clone https://github.com/SAquante/myvpn.git
-    cd myvpn
+    git clone https://github.com/SAquante/vpnturbo.git
+    cd vpnturbo
 fi
 
 # Build MyVPN server
