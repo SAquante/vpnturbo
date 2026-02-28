@@ -101,7 +101,7 @@ if [ -d "myvpn" ]; then
     cd myvpn
     git pull
 else
-    git clone https://github.com/torwin-job/myvpn.git
+    git clone https://github.com/SAquante/myvpn.git
     cd myvpn
 fi
 
