@@ -135,15 +135,62 @@ systemctl restart myvpn
 
 SERVER_IP=$(curl -s ifconfig.me)
 
+# Генерируем VLESS ссылку для v2rayNG
+VLESS_LINK="vless://${UUID}@${SERVER_IP}:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.microsoft.com&fp=chrome&pbk=${PUBLIC_KEY}&sid=12345678&type=tcp#VPNTurbo"
+
+# Сохраняем все данные в файл для последующего доступа
+cat > /opt/myvpn/client_info.txt <<EOF
+=============== VPNTurbo Client Configuration ===============
+Server IP:          $SERVER_IP
+Xray UUID:          $UUID
+Xray Public Key:    $PUBLIC_KEY
+VPN Master Key:     $VPN_KEY
+VLESS Link:         $VLESS_LINK
+=============================================================
+EOF
+
 echo "[5/5] Setup Finished Successfully!"
 echo "=================================================================="
 echo "    🎉 SERVER IS RUNNING AND READY TO ACCEPT CONNECTIONS 🎉     "
 echo "=================================================================="
-echo "Your IP Address (For Client IP):   $SERVER_IP"
-echo "Your Xray UUID (For ID):           $UUID"
-echo "Your Xray Public Key (For Reality): $PUBLIC_KEY"
-echo "Your VPN Master Key:               $VPN_KEY"
+echo ""
+echo "📋 Ваши данные для подключения:"
+echo "  IP Адрес сервера:    $SERVER_IP"
+echo "  Xray UUID:           $UUID"
+echo "  Xray Public Key:     $PUBLIC_KEY"
+echo "  VPN Master Key:      $VPN_KEY"
+echo ""
 echo "=================================================================="
-echo "Use the settings above in your v2rayNG (Android) / v2rayN (Windows)"
-echo "And run myvpn-client with -key \$VPN_KEY -socks5 127.0.0.1:10808"
+echo "📱 ССЫЛКА ДЛЯ v2rayNG (скопируйте и вставьте в приложение):"
+echo "=================================================================="
+echo ""
+echo "$VLESS_LINK"
+echo ""
+echo "=================================================================="
+
+# Пробуем сгенерировать QR-код (если qrencode установлен)
+if command -v qrencode &> /dev/null; then
+    echo "📲 QR-код для v2rayNG (отсканируйте камерой в приложении):"
+    echo ""
+    qrencode -t ANSIUTF8 "$VLESS_LINK"
+    echo ""
+else
+    echo "💡 Для генерации QR-кода установите: apt install qrencode"
+    echo "   Затем выполните: qrencode -t ANSIUTF8 \"\$(cat /opt/myvpn/client_info.txt | grep 'VLESS Link' | cut -d' ' -f10-)\""
+fi
+
+echo ""
+echo "=================================================================="
+echo "📖 ИНСТРУКЦИЯ:"
+echo "  1. Откройте v2rayNG на Android"
+echo "  2. Нажмите + → Import from clipboard (вставьте VLESS ссылку)"
+echo "     ИЛИ нажмите + → Scan QR code"
+echo "  3. Подключитесь к серверу"
+echo "  4. Запустите myvpn-client:"
+echo "     ./myvpn-client -server $SERVER_IP:8080 -key $VPN_KEY -socks5 127.0.0.1:10808"
+echo "=================================================================="
+echo ""
+echo "⚙️  Все данные сохранены в: /opt/myvpn/client_info.txt"
+echo "    Статус Xray:  systemctl status xray"
+echo "    Статус MyVPN: systemctl status myvpn"
 echo "=================================================================="
