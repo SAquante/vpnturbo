@@ -48,24 +48,9 @@ func (c *Client) SendPacket(transport *transport.UDPTransport, packet []byte) er
 		return fmt.Errorf("compression failed: %w", err)
 	}
 
-	// Шифруем пакет
-	encrypted, err := c.crypto.Encrypt(compressed)
-	if err != nil {
-		return err
-	}
-
-	// Добавляем флаг сжатия в начало зашифрованных данных
-	result := make([]byte, 1+len(encrypted))
-	if isCompressed {
-		result[0] = internal.FlagCompressed
-	} else {
-		result[0] = 0
-	}
-	copy(result[1:], encrypted)
-
-	// Устанавливаем удаленный адрес и отправляем
+	// Устанавливаем удаленный адрес и отправляем (транспорт сам зашифрует)
 	transport.SetRemoteAddr(c.remoteAddr)
-	_, err = transport.Write(result)
+	_, err = transport.Write(compressed, isCompressed)
 	return err
 }
 
@@ -90,6 +75,7 @@ type Server struct {
 	transport      *transport.UDPTransport
 	networkManager *NetworkManager
 	clients        map[string]*Client
+	clientsByIP    map[string]*Client
 	clientsMu      sync.RWMutex
 	done           chan struct{}
 	wg             sync.WaitGroup
@@ -124,6 +110,7 @@ func NewServer(listenAddr string, key []byte, verbose bool) (*Server, error) {
 		crypto:         crypto,
 		networkManager: networkManager,
 		clients:        make(map[string]*Client),
+		clientsByIP:    make(map[string]*Client),
 		done:           make(chan struct{}),
 		verbose:        verbose,
 	}, nil
@@ -137,7 +124,7 @@ func (s *Server) Start() error {
 	}
 
 	// Создаем UDP транспорт
-	udpTransport, err := transport.NewUDPTransport(s.listenAddr, "", 30*time.Second)
+	udpTransport, err := transport.NewUDPTransport(s.listenAddr, "", 30*time.Second, s.crypto)
 	if err != nil {
 		s.networkManager.Cleanup()
 		return fmt.Errorf("failed to create UDP transport: %w", err)
@@ -185,25 +172,27 @@ func (s *Server) handleTunToClients() {
 		}
 
 		if n > 0 {
-			// Отправляем всем подключенным клиентам
-			s.clientsMu.RLock()
-			clientCount := len(s.clients)
-			if s.verbose {
-				log.Printf("Read %d bytes from TUN, sending to %d client(s)", n, clientCount)
-			}
-			if clientCount == 0 {
+			// Проверяем IPv4 заголовок
+			if n >= 20 && packet[0]>>4 == 4 {
+				// Извлекаем Destination IP
+				destIP := net.IPv4(packet[16], packet[17], packet[18], packet[19]).String()
+				
+				s.clientsMu.RLock()
+				client, ok := s.clientsByIP[destIP]
 				s.clientsMu.RUnlock()
-				log.Printf("Warning: no clients to send TUN packet to (dropped %d bytes)", n)
-				continue
-			}
-			for _, client := range s.clients {
-				if err := client.SendPacket(s.transport, packet[:n]); err != nil {
+
+				if ok {
+					if err := client.SendPacket(s.transport, packet[:n]); err != nil {
+						if s.verbose {
+							log.Printf("Error sending packet to client %s: %v", client.remoteAddr, err)
+						}
+					}
+				} else {
 					if s.verbose {
-						log.Printf("Error sending packet to client %s: %v", client.remoteAddr, err)
+						log.Printf("Dropped packet for unknown virtual IP: %s", destIP)
 					}
 				}
 			}
-			s.clientsMu.RUnlock()
 		}
 	}
 }
@@ -220,7 +209,7 @@ func (s *Server) handleClientsToTun() {
 		case <-s.done:
 			return
 		default:
-			n, err := s.transport.Read(buf)
+			n, isCompressed, remoteAddr, err := s.transport.Read(buf)
 			if err != nil {
 				select {
 				case <-s.done:
@@ -232,38 +221,11 @@ func (s *Server) handleClientsToTun() {
 			}
 
 			if n > 0 {
-				// Получаем адрес клиента
-				remoteAddr := s.transport.RemoteAddr()
 				if remoteAddr == nil {
 					continue
 				}
 
-				// Регистрируем клиента если его еще нет
-				clientKey := remoteAddr.String()
-				s.clientsMu.Lock()
-				client, exists := s.clients[clientKey]
-				if !exists {
-					client = NewClient(remoteAddr, s.crypto, s.tun, s.verbose)
-					s.clients[clientKey] = client
-					log.Printf("New client connected from %s", remoteAddr)
-				}
-				s.clientsMu.Unlock()
-
-				if n < 1 {
-					continue
-				}
-
-				// Извлекаем флаг сжатия
-				flags := buf[0]
-				isCompressed := (flags & internal.FlagCompressed) != 0
-
-				// Дешифруем пакет
-				encrypted := buf[1:n]
-				packet, err := s.crypto.Decrypt(encrypted)
-				if err != nil {
-					log.Printf("Error decrypting packet from %s: %v", remoteAddr, err)
-					continue
-				}
+				packet := buf[:n]
 
 				// Распаковываем если нужно
 				if isCompressed {
@@ -275,6 +237,26 @@ func (s *Server) handleClientsToTun() {
 				}
 
 				if len(packet) > 0 {
+					// Проверяем IPv4 пакет и извлекаем Source IP (виртуальный IP клиента)
+					if len(packet) >= 20 && packet[0]>>4 == 4 {
+						srcIP := net.IPv4(packet[12], packet[13], packet[14], packet[15]).String()
+						
+						// Регистрируем/обновляем клиента уже ПОСЛЕ успешной дешифровки пакета!
+						clientKey := remoteAddr.String()
+						s.clientsMu.Lock()
+						client, exists := s.clients[clientKey]
+						if !exists {
+							client = NewClient(remoteAddr, s.crypto, s.tun, s.verbose)
+							s.clients[clientKey] = client
+							log.Printf("New client connected from %s with virtual IP %s", remoteAddr, srcIP)
+						}
+						// Обновляем маппинг по IP
+						if s.clientsByIP[srcIP] != client {
+							s.clientsByIP[srcIP] = client
+						}
+						s.clientsMu.Unlock()
+					}
+
 					if s.verbose {
 						log.Printf("Received %d bytes from client %s, writing to TUN", len(packet), remoteAddr)
 					}

@@ -19,8 +19,9 @@ func main() {
 		keyFile         = flag.String("key", "", "Path to encryption key file (32 bytes binary or 64 hex chars)")
 		clientIP        = flag.String("ip", "10.0.0.2", "Client IP address for TUN interface")
 		verbose         = flag.Bool("verbose", false, "Enable verbose logging (logs every packet)")
-		pprofAddr       = flag.String("pprof", ":6060", "Address for pprof HTTP server (empty to disable)")
+		pprofAddr       = flag.String("pprof", "127.0.0.1:6060", "Address for pprof HTTP server (empty to disable)")
 		autoRoutes      = flag.Bool("auto-routes", true, "Automatically configure routes (redirect all traffic through VPN)")
+		socks5Proxy     = flag.String("socks5", "", "SOCKS5 Proxy address for Xray-core backend (e.g., 127.0.0.1:1080)")
 	)
 	flag.Parse()
 
@@ -61,7 +62,7 @@ func main() {
 	}
 
 	// Создаем клиент
-	vpnClient, err := client.NewVPNClient(*serverAddr, key, *clientIP, *verbose, *autoRoutes)
+	vpnClient, err := client.NewVPNClient(*serverAddr, key, *clientIP, *verbose, *autoRoutes, *socks5Proxy)
 	if err != nil {
 		log.Fatalf("Failed to create VPN client: %v", err)
 	}

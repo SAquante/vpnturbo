@@ -17,11 +17,11 @@ import (
 
 func main() {
 	var (
-		listenAddr   = flag.String("addr", ":8080", "Address to listen on")
+		listenAddr   = flag.String("addr", "127.0.0.1:8080", "Address to listen on (default localhost for Xray backend)")
 		keyFile      = flag.String("key", "", "Path to encryption key file (32 bytes). If not provided, a random key will be generated")
 		verbose      = flag.Bool("verbose", false, "Enable verbose logging (logs every packet)")
-		pprofAddr    = flag.String("pprof", ":6060", "Address for pprof HTTP server (empty to disable)")
-		metricsAddr  = flag.String("metrics", ":6061", "Address for metrics HTTP server (empty to disable)")
+		pprofAddr    = flag.String("pprof", "127.0.0.1:6060", "Address for pprof HTTP server (empty to disable)")
+		metricsAddr  = flag.String("metrics", "127.0.0.1:6061", "Address for metrics HTTP server (empty to disable)")
 	)
 	flag.Parse()
 

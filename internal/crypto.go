@@ -40,7 +40,7 @@ func NewCrypto(key []byte) (*Crypto, error) {
 }
 
 // Encrypt шифрует данные и возвращает nonce + зашифрованные данные + tag
-func (c *Crypto) Encrypt(plaintext []byte) ([]byte, error) {
+func (c *Crypto) Encrypt(plaintext []byte, aad []byte) ([]byte, error) {
 	// Получаем nonce из пула
 	nonce := bufpool.GetNonce()
 	defer bufpool.PutNonce(nonce)
@@ -50,7 +50,7 @@ func (c *Crypto) Encrypt(plaintext []byte) ([]byte, error) {
 	}
 
 	// Шифруем данные
-	ciphertext := c.aead.Seal(nil, nonce, plaintext, nil)
+	ciphertext := c.aead.Seal(nil, nonce, plaintext, aad)
 
 	// Выделяем результат (не из пула, так как возвращаем его)
 	result := make([]byte, NonceSize+len(ciphertext))
@@ -61,7 +61,7 @@ func (c *Crypto) Encrypt(plaintext []byte) ([]byte, error) {
 }
 
 // Decrypt дешифрует данные (nonce + encrypted_data + tag)
-func (c *Crypto) Decrypt(ciphertext []byte) ([]byte, error) {
+func (c *Crypto) Decrypt(ciphertext []byte, aad []byte) ([]byte, error) {
 	if len(ciphertext) < Overhead {
 		return nil, errors.New("ciphertext too short")
 	}
@@ -71,7 +71,7 @@ func (c *Crypto) Decrypt(ciphertext []byte) ([]byte, error) {
 	encryptedData := ciphertext[NonceSize:]
 
 	// Дешифруем данные
-	plaintext, err := c.aead.Open(nil, nonce, encryptedData, nil)
+	plaintext, err := c.aead.Open(nil, nonce, encryptedData, aad)
 	if err != nil {
 		return nil, err
 	}

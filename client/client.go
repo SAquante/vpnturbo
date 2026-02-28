@@ -18,6 +18,7 @@ type VPNClient struct {
 	crypto       *internal.Crypto
 	protocol     *internal.Protocol
 	transport    *transport.UDPTransport
+	socks5Proxy  string
 	routeManager *RouteManager
 	done         chan struct{}
 	wg           sync.WaitGroup
@@ -26,7 +27,7 @@ type VPNClient struct {
 }
 
 // NewVPNClient создает новый VPN клиент
-func NewVPNClient(serverAddr string, key []byte, clientIP string, verbose bool, autoRoutes bool) (*VPNClient, error) {
+func NewVPNClient(serverAddr string, key []byte, clientIP string, verbose bool, autoRoutes bool, socks5Proxy string) (*VPNClient, error) {
 	// Создаем TUN интерфейс
 	tun, err := NewTUN(TUNInterfaceName, clientIP)
 	if err != nil {
@@ -58,6 +59,7 @@ func NewVPNClient(serverAddr string, key []byte, clientIP string, verbose bool, 
 		tun:          tun,
 		crypto:       crypto,
 		protocol:     protocol,
+		socks5Proxy:  socks5Proxy,
 		routeManager: routeManager,
 		done:         make(chan struct{}),
 		verbose:      verbose,
@@ -68,7 +70,10 @@ func NewVPNClient(serverAddr string, key []byte, clientIP string, verbose bool, 
 // Connect подключается к VPN серверу и начинает обмен пакетами
 func (c *VPNClient) Connect() error {
 	// Создаем UDP транспорт
-	udpTransport, err := transport.NewUDPTransport(":0", c.serverAddr, 30*time.Second)
+	if c.socks5Proxy != "" {
+		log.Printf("Connecting to %s via SOCKS5 proxy at %s", c.serverAddr, c.socks5Proxy)
+	}
+	udpTransport, err := transport.NewUDPTransport(":0", c.serverAddr, 30*time.Second, c.crypto, c.socks5Proxy)
 	if err != nil {
 		return fmt.Errorf("failed to create UDP transport: %w", err)
 	}
@@ -158,30 +163,8 @@ func (c *VPNClient) sendPacketUDP(packet []byte) error {
 		return fmt.Errorf("compression failed: %w", err)
 	}
 
-	// Шифруем пакет
-	encrypted, err := c.crypto.Encrypt(compressed)
-	if err != nil {
-		return err
-	}
-
-	// Добавляем флаг сжатия в начало зашифрованных данных
-	// Используем первый байт для флагов (бит 0 = сжатие)
-	result := make([]byte, 1+len(encrypted))
-	if isCompressed {
-		result[0] = internal.FlagCompressed
-	} else {
-		result[0] = 0
-	}
-	copy(result[1:], encrypted)
-
-	// Проверяем размер после всех преобразований (шифрование + флаг сжатия)
-	// MaxPacketSize в транспорте - это размер до добавления UDP заголовка транспорта
-	if len(result) > transport.MaxPacketSize {
-		return fmt.Errorf("packet too large after encryption: %d bytes (max %d), original: %d bytes", len(result), transport.MaxPacketSize, len(packet))
-	}
-
-	// Отправляем через UDP транспорт
-	_, err = c.transport.Write(result)
+	// Отправляем через UDP транспорт, который сам зашифрует данные и добавит AAD заголовки
+	_, err = c.transport.Write(compressed, isCompressed)
 	return err
 }
 
@@ -200,7 +183,7 @@ func (c *VPNClient) handleServerToTun() {
 			return
 		default:
 			// Читаем из UDP транспорта
-			n, err := c.transport.Read(buf)
+			n, isCompressed, _, err := c.transport.Read(buf)
 			if err != nil {
 				select {
 				case <-c.done:
@@ -213,21 +196,7 @@ func (c *VPNClient) handleServerToTun() {
 			}
 
 			if n > 0 {
-				if n < 1 {
-					continue
-				}
-
-				// Извлекаем флаг сжатия
-				flags := buf[0]
-				isCompressed := (flags & internal.FlagCompressed) != 0
-
-				// Дешифруем пакет
-				encrypted := buf[1:n]
-				packet, err := c.crypto.Decrypt(encrypted)
-				if err != nil {
-					log.Printf("Error decrypting packet: %v", err)
-					continue
-				}
+				packet := buf[:n]
 
 				// Распаковываем если нужно
 				if isCompressed {

@@ -20,7 +20,7 @@ func NewProtocol(crypto *Crypto) *Protocol {
 // SendPacket отправляет зашифрованный пакет через writer
 func (p *Protocol) SendPacket(writer io.Writer, packet []byte) error {
 	// Шифруем пакет
-	encrypted, err := p.crypto.Encrypt(packet)
+	encrypted, err := p.crypto.Encrypt(packet, nil)
 	if err != nil {
 		return err
 	}
@@ -78,7 +78,7 @@ func (p *Protocol) ReceivePacket(reader io.Reader) ([]byte, error) {
 		return nil, err
 	}
 
-	packet, err := p.crypto.Decrypt(encrypted)
+	packet, err := p.crypto.Decrypt(encrypted, nil)
 	if err != nil {
 		return nil, err
 	}
