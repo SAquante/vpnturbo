@@ -124,7 +124,7 @@ func (s *Server) Start() error {
 	}
 
 	// Создаем UDP транспорт
-	udpTransport, err := transport.NewUDPTransport(s.listenAddr, "", 30*time.Second, s.crypto)
+	udpTransport, err := transport.NewUDPTransport(s.listenAddr, "", 30*time.Second, s.crypto, "")
 	if err != nil {
 		s.networkManager.Cleanup()
 		return fmt.Errorf("failed to create UDP transport: %w", err)
